@@ -653,10 +653,20 @@ function installNativeToString(w) {
     // Skip host-realm objects (under Bun, installGlobalWindowAlias exposes
     // Bun internals via window getters; sweeping them crashes on native
     // internal-field slots). happy-dom objects live in the window realm.
+    // Node webstreams/undici internals are brand-checked: merely touching a
+    // getter with the wrong receiver throws (ERR_INVALID_THIS), and some of
+    // those getters return live Promises — an unhandled rejection here kills
+    // the whole host process, so skip the whole family outright.
     try {
       if (obj.constructor && obj.constructor.prototype !== Object.prototype) {
         const ctorName = obj.constructor.name;
-        if (/^(WriteStream|ReadStream|Socket|Process|Timeout|Immediate)$/.test(ctorName)) return;
+        if (
+          /^(WriteStream|ReadStream|Socket|Process|Timeout|Immediate|WritableStream|ReadableStream|TransformStream|MessagePort|MessageChannel|Worker|BroadcastChannel)$/.test(
+            ctorName,
+          )
+        ) {
+          return;
+        }
       }
     } catch (_) {}
     if (seen.has(obj)) return;
@@ -686,13 +696,24 @@ function installNativeToString(w) {
         mask(desc.get);
         try {
           const v = desc.get.call(obj);
-          if (typeof v === "function") mask(v);
+          // Getters on exotic objects can return live Promises whose
+          // rejections nobody else will handle (e.g. webstream brand-check
+          // failures) — swallow them or the host process dies.
+          if (v && typeof v.then === "function") {
+            Promise.resolve(v).catch(() => {});
+          } else if (typeof v === "function") {
+            mask(v);
+          }
         } catch (_) {}
       }
       if (depth < 3) {
         try {
           const v = desc.value;
-          if (v && (typeof v === "function" || typeof v === "object")) maskObj(v, depth + 1);
+          if (v && typeof v.then === "function") {
+            Promise.resolve(v).catch(() => {});
+          } else if (v && (typeof v === "function" || typeof v === "object")) {
+            maskObj(v, depth + 1);
+          }
         } catch (_) {}
       }
     }

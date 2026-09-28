@@ -79,6 +79,11 @@ const SYNC_WORKER_SRC = `
 function ensureSyncFetchWorker(): Worker {
   if (_syncFetchWorker) return _syncFetchWorker;
   _syncFetchWorker = new Worker(SYNC_WORKER_SRC, { eval: true });
+  // Unref: a live Worker ref's the process and would keep `pi -p`/scripts
+  // alive forever after the turn completes. The handshake below blocks the
+  // main thread in Atomics.wait, so the worker still runs while needed; once
+  // the host has nothing else to do it may exit and abandon idle solves.
+  _syncFetchWorker.unref();
   return _syncFetchWorker;
 }
 
